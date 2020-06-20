@@ -25,18 +25,21 @@ import com.alibaba.fastjson.JSONObject;
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
 import com.mongodb.MongoClient;
-import com.mongodb.client.MongoCollection;
-import com.mongodb.client.MongoCursor;
-import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.*;
 import org.bson.Document;
 import org.bson.types.ObjectId;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.alibaba.datax.common.element.Column;
 /**
  * Created by jianying.wcj on 2015/3/19 0019.
  * Modified by mingyan.zc on 2016/6/13.
  * Modified by mingyan.zc on 2017/7/5.
  */
 public class MongoDBReader extends Reader {
+    private static final Logger LOG = LoggerFactory
+            .getLogger(Reader.class);
+
 
     public static class Job extends Reader.Job {
 
@@ -46,10 +49,13 @@ public class MongoDBReader extends Reader {
 
         private String userName = null;
         private String password = null;
+        private String query = null;
+
+
 
         @Override
         public List<Configuration> split(int adviceNumber) {
-            return CollectionSplitUtil.doSplit(originalConfig,adviceNumber,mongoClient);
+            return CollectionSplitUtil.doSplit(originalConfig,adviceNumber,this.mongoClient,query);
         }
 
         @Override
@@ -57,13 +63,20 @@ public class MongoDBReader extends Reader {
             this.originalConfig = super.getPluginJobConf();
             this.userName = originalConfig.getString(KeyConstant.MONGO_USER_NAME, originalConfig.getString(KeyConstant.MONGO_USERNAME));
             this.password = originalConfig.getString(KeyConstant.MONGO_USER_PASSWORD, originalConfig.getString(KeyConstant.MONGO_PASSWORD));
+
             String database =  originalConfig.getString(KeyConstant.MONGO_DB_NAME, originalConfig.getString(KeyConstant.MONGO_DATABASE));
             String authDb =  originalConfig.getString(KeyConstant.MONGO_AUTHDB, database);
+            this.query = originalConfig.getString(KeyConstant.MONGO_QUERY);
             if(!Strings.isNullOrEmpty(this.userName) && !Strings.isNullOrEmpty(this.password)) {
                 this.mongoClient = MongoUtil.initCredentialMongoClient(originalConfig,userName,password,authDb);
+
+
+
             } else {
                 this.mongoClient = MongoUtil.initMongoClient(originalConfig);
             }
+
+
         }
 
         @Override
@@ -93,15 +106,18 @@ public class MongoDBReader extends Reader {
         private Object upperBound = null;
         private boolean isObjectId = true;
 
+        private boolean jsonType = false;
+
         @Override
         public void startRead(RecordSender recordSender) {
 
             if(lowerBound== null || upperBound == null ||
-                mongoClient == null || database == null ||
-                collection == null  || mongodbColumnMeta == null) {
+                    mongoClient == null || database == null ||
+                    collection == null  || mongodbColumnMeta == null) {
                 throw DataXException.asDataXException(MongoDBReaderErrorCode.ILLEGAL_VALUE,
-                    MongoDBReaderErrorCode.ILLEGAL_VALUE.getDescription());
+                        MongoDBReaderErrorCode.ILLEGAL_VALUE.getDescription());
             }
+
             MongoDatabase db = mongoClient.getDatabase(database);
             MongoCollection col = db.getCollection(this.collection);
 
@@ -123,7 +139,18 @@ public class MongoDBReader extends Reader {
             dbCursor = col.find(filter).iterator();
             while (dbCursor.hasNext()) {
                 Document item = dbCursor.next();
+
                 Record record = recordSender.createRecord();
+
+
+
+                if(jsonType ){
+                    record.addColumn(new StringColumn(item.toJson()));
+                    item=null;
+                    recordSender.sendToWriter(record);
+                    continue;
+                }
+
                 Iterator columnItera = mongodbColumnMeta.iterator();
                 while (columnItera.hasNext()) {
                     JSONObject column = (JSONObject)columnItera.next();
@@ -150,7 +177,7 @@ public class MongoDBReader extends Reader {
                     }
                     if (tempCol == null) {
                         //continue; 这个不能直接continue会导致record到目的端错位
-                        record.addColumn(new StringColumn(null));
+                        record.addColumn(new StringColumn(""));
                     }else if (tempCol instanceof Double) {
                         //TODO deal with Double.isNaN()
                         record.addColumn(new DoubleColumn((Double) tempCol));
@@ -162,12 +189,31 @@ public class MongoDBReader extends Reader {
                         record.addColumn(new LongColumn((Integer) tempCol));
                     }else if (tempCol instanceof Long) {
                         record.addColumn(new LongColumn((Long) tempCol));
+                    } else if(tempCol instanceof ArrayList && "STRING".equalsIgnoreCase(column.getString(KeyConstant.COLUMN_TYPE))){
+
+                        ArrayList array = (ArrayList)tempCol;
+                        ArrayList resultList  = new ArrayList<String>(array.size());
+                        for (Object obj : array) {
+                            if(obj instanceof Document){
+                                resultList.add(((Document)obj).toJson());
+
+                            }else{
+                                resultList.add(JSON.toJSON(obj));
+
+                            }
+                        }
+
+                        record.addColumn(new StringColumn(JSON.toJSONString(resultList)));
+                    } else if(tempCol instanceof Document  && "STRING".equalsIgnoreCase(column.getString(KeyConstant.COLUMN_TYPE))){
+//                        ((Document) tempCol).toJson();
+                        record.addColumn(new StringColumn( ((Document) tempCol).toJson()));
+
                     } else {
                         if(KeyConstant.isArrayType(column.getString(KeyConstant.COLUMN_TYPE))) {
                             String splitter = column.getString(KeyConstant.COLUMN_SPLITTER);
                             if(Strings.isNullOrEmpty(splitter)) {
                                 throw DataXException.asDataXException(MongoDBReaderErrorCode.ILLEGAL_VALUE,
-                                    MongoDBReaderErrorCode.ILLEGAL_VALUE.getDescription());
+                                        MongoDBReaderErrorCode.ILLEGAL_VALUE.getDescription());
                             } else {
                                 ArrayList array = (ArrayList)tempCol;
                                 String tempArrayStr = Joiner.on(splitter).join(array);
@@ -178,6 +224,8 @@ public class MongoDBReader extends Reader {
                         }
                     }
                 }
+
+
                 recordSender.sendToWriter(record);
             }
         }
@@ -201,12 +249,19 @@ public class MongoDBReader extends Reader {
             this.lowerBound = readerSliceConfig.get(KeyConstant.LOWER_BOUND);
             this.upperBound = readerSliceConfig.get(KeyConstant.UPPER_BOUND);
             this.isObjectId = readerSliceConfig.getBool(KeyConstant.IS_OBJECTID);
+
+            // 是否保存数据格式为json类型
+
+            this.jsonType = readerSliceConfig.getBool(KeyConstant.JSON_TYPE,false);
+            LOG.info("jsonType:{},导出数据为JSON类型，将会忽略用户配置的column",this.jsonType);
         }
+
 
         @Override
         public void destroy() {
 
         }
+
 
     }
 }

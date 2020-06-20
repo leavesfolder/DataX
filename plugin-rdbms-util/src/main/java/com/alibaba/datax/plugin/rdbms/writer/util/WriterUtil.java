@@ -119,8 +119,7 @@ public final class WriterUtil {
         }
         // && writeMode.trim().toLowerCase().startsWith("replace")
         String writeDataSqlTemplate;
-        if (forceUseUpdate ||
-                ((dataBaseType == DataBaseType.MySql || dataBaseType == DataBaseType.Tddl) && writeMode.trim().toLowerCase().startsWith("update"))
+        if (forceUseUpdate || ((dataBaseType == DataBaseType.MySql || dataBaseType == DataBaseType.Tddl) && writeMode.trim().toLowerCase().startsWith("update"))
                 ) {
             //update只在mysql下使用
 

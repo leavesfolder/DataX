@@ -384,6 +384,10 @@ public final class DBUtil {
         return connect(dataBaseType, url, prop);
     }
 
+
+
+
+
     private static synchronized Connection connect(DataBaseType dataBaseType,
                                                    String url, Properties prop) {
         try {
@@ -426,6 +430,8 @@ public final class DBUtil {
         Statement stmt = conn.createStatement(ResultSet.TYPE_FORWARD_ONLY,
                 ResultSet.CONCUR_READ_ONLY);
         stmt.setFetchSize(fetchSize);
+        stmt.setFetchSize(Integer.MIN_VALUE);
+        stmt.setFetchDirection(ResultSet.FETCH_REVERSE);
         stmt.setQueryTimeout(queryTimeout);
         return query(stmt, sql);
     }
